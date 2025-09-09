@@ -1,0 +1,58 @@
+dataset_params:
+  dataset: 'imagenet'
+  img_size: 256
+  batch_size: 64
+  num_workers: 8
+  params:
+    dataset_dir: /content/train2017
+    ann_file_path: /content/annotations/captions_train2017.json
+
+model:
+  optim_params:
+    learning_rate: 1e-4
+    b1: 0.9
+    b2: 0.999
+    weight_decay: 1e-4
+    eps: 1e-8
+  target: vqmodel.ConvVQModel
+  seed: 42
+  params:
+      token_size: 14
+      commitment_cost: 0.25
+      entropy_loss_weight: 0.02
+      entropy_loss_temperature: 0.01
+      entropy_gamma: 1.0
+      filters: 128
+      channel_mult: [1, 1, 2, 2, 4]
+      num_res_blocks: 2
+  checkpoint_path: /content/drive/MyDrive/Stable-Diffusion/vqmodel_coco.pkl
+  reconstruction_weight: 4.0
+  quantizer_weight: 1.0
+  entropy_annealing_steps: 2000
+  entropy_annealing_factor: 2.0
+  epochs: 250
+  ema_decay: 0.999
+
+discriminator:
+  optim_params:
+    learning_rate: 1e-4
+    b1: 0.9
+    b2: 0.999
+    weight_decay: 1e-4
+    eps: 1e-8
+  target: discriminator.discriminator
+  params:
+    filters: 128
+    channel_multipliers: [1, 2, 4, 8]
+    blur_kernel_size: 4
+  discriminator_weight: 0.02
+  lecam_regularization_weight: 0.001
+  disc_start: 20000
+
+perceptual:
+  target: perceptual.PerceptualLoss
+  perceptual_weight: 0.1
+
+wandb:
+  project: 'MaskBit'
+  name: 'tokenizer imagenet'

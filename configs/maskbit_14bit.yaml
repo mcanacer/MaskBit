@@ -1,0 +1,53 @@
+dataset_params:
+  dataset: 'imagenet'
+  img_size: 256
+  batch_size: 128
+  num_workers: 8
+
+model:
+  optim_params:
+    learning_rate: 1e-4
+    b1: 0.9
+    b2: 0.96
+    weight_decay: 0.045
+    eps: 1e-8
+  seed: 42
+  target: 'LFQBert'
+  num_steps: 64
+  class_label_dropout: 0.1
+  label_smoothing: 0.1
+  softmax_temperature: 1.0
+  randomize_temperature: 7.8
+  guidance_scale: 7.1
+  guidance_annealing: "none"
+  scale_pow: 1.0
+  params:
+    hidden_dim: 1024
+    depth: 24
+    num_heads: 16
+    dropout: 0.1
+    mask_token: 128
+    drop_label: 1000
+    num_classes: 1000
+    effective_codebook_size: 128
+    splits: 2
+  checkpoint_path: /content/drive/MyDrive/MaskBit/maskbit_imagenet.pkl
+  epochs: 200
+  ema_decay: 0.999
+
+vqmodel:
+  target: model.ConvVQModel
+  params:
+    token_size: 14
+    commitment_cost: 0.25
+    entropy_loss_weight: 0.02
+    entropy_loss_temperature: 0.01
+    entropy_gamma: 1.0
+    filters: 128
+    channel_multipliers: [1, 1, 2, 2, 4]
+    num_res_blocks: 2
+  checkpoint_path: /content/drive/MyDrive/MaskBit/imagenet_tokenizer.pkl
+
+wandb:
+  project: 'Stable-Diffusion'
+  name: 'Diffusion coco'

@@ -4,6 +4,7 @@ import jax
 import jax.numpy as jnp
 
 import flax.linen as nn
+import math
 
 from utils import entropy_loss_fn
 
@@ -121,7 +122,7 @@ class ConvDecoder(nn.Module):
 
         x = nn.GroupNorm(num_groups=32)(x)
         x = jax.nn.silu(x)
-        x = nn.Conv(self.token_size, kernel_size=(3, 3))(x)
+        x = nn.Conv(3, kernel_size=(3, 3))(x)
 
         return x
 
@@ -175,6 +176,12 @@ class LookupFreeQuantizer(nn.Module):
 
         return z_quantized, result_dict
 
+    def get_codebook_entry(self, indices):
+        indices = indices.astype(jnp.int32)
+        bits = ((indices[..., None].astype(jnp.int32) & self.bits_to_indices) != 0).astype(jnp.float32)
+        tokens = bits * 2.0 - 1.0
+        return tokens
+
     def convert_bits_to_indices(self, tokens):
         sign_mask = (tokens > 0.0).astype(jnp.int32)
         bits_to_indices = jnp.pow(2.0, jnp.arange(0, self.token_bits, dtype=jnp.float32)).astype(jnp.int32)
@@ -216,6 +223,13 @@ class ConvVQModel(nn.Module):
         z_quantized, result_dict = self.encode(x, train=train)
         decoded = self.decode(z_quantized)
         return decoded, result_dict
+
+    def decode_tokens(self, tokens):
+        z_quantized = self.quantizer.get_codebook_entry(tokens)
+        ss = int(math.sqrt(float(z_quantized.shape[1])))
+        z_quantized = z_quantized.reshape(z_quantized.shape[0], ss, ss, -1)
+        decoded = self.decode(z_quantized)
+        return decoded
 
     def encode(self, x, train=True):
         z = self.encoder(x)

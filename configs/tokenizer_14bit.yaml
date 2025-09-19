@@ -1,7 +1,7 @@
 dataset_params:
   dataset: 'imagenet'
   img_size: 256
-  batch_size: 64
+  batch_size: 128
   num_workers: 8
   params:
     dataset_dir: /content/train2017

@@ -8,7 +8,6 @@ import optax
 from flax import serialization
 from torchvision import transforms
 from datasets import load_dataset
-from dataset import HuggingFace, CocoDataset
 from torch.utils.data import DataLoader
 import wandb
 from vqmodel import ConvVQModel
@@ -42,19 +41,12 @@ def ema_update(ema_params, new_params, decay):
     )
 
 
-def sigmoid_cross_entropy_with_logits(logits, labels):
-    zeros = jnp.zeros_like(logits, dtype=logits.dtype)
-    condition = (logits >= zeros)
-    relu_logits = jnp.where(condition, logits, zeros)
-    neg_abs_logits = jnp.where(condition, -logits, logits)
-    return relu_logits - logits * labels + jnp.log1p(jnp.exp(neg_abs_logits))
-
-
 def make_generator_update_fn(*, vqmodel_apply_fn, vqmodel_optimizer,
                              disc_apply_fn, perceptual_apply_fn,
                              reconstruction_weight, perceptual_weight, discriminator_weight,
-                             entropy_annealing_factor, entropy_annealing_steps, quantizer_weight, ema_decay, disc_start):
-    def update_fn(vqmodel_params, vqmodel_opt_state, disc_params, perceptual_params, images, ema_params, global_step):
+                             entropy_annealing_factor, quantizer_weight, ema_decay, disc_start):
+    def update_fn(vqmodel_params, vqmodel_opt_state,
+                  disc_params, perceptual_params, images, ema_params, annealing_steps, global_step):
         def loss_fn(params):
             recontructed_images, extra_result_dict = vqmodel_apply_fn(params, images)
 
@@ -68,18 +60,17 @@ def make_generator_update_fn(*, vqmodel_apply_fn, vqmodel_optimizer,
             discriminator_factor = adopt_weight(global_step, disc_start)
 
             d_weight = 1.0
-            if discriminator_factor > 0.0:
-                logits_fake = disc_apply_fn(disc_params, recontructed_images)
-                generator_loss = -jnp.mean(logits_fake)
+
+            logits_fake = disc_apply_fn(disc_params, recontructed_images)
+            generator_loss = -jnp.mean(logits_fake)
 
             d_weight *= discriminator_weight
 
             quantizer_loss = extra_result_dict['quantizer_loss']
-            if entropy_annealing_factor > 0.0:
-                quantizer_loss += (
-                    max(0.0, 1 - global_step / entropy_annealing_steps)
-                    * entropy_annealing_factor * extra_result_dict["entropy_loss"]
-                )
+
+            quantizer_loss += (
+                annealing_steps * entropy_annealing_factor * extra_result_dict["entropy_loss"]
+            )
 
             total_loss = (
                     reconstruction_loss
@@ -106,7 +97,7 @@ def make_generator_update_fn(*, vqmodel_apply_fn, vqmodel_optimizer,
 
             return total_loss, loss_dict
 
-        (loss, loss_dict), grad = jax.value_and_grad(loss_fn, has_aux=True)(vqmodel_params)  # watch out
+        ((loss, loss_dict), grad) = jax.value_and_grad(loss_fn, has_aux=True)(vqmodel_params)  # watch out
 
         loss, grad = jax.tree_util.tree_map(
             lambda x: jax.lax.pmean(x, axis_name='batch'),
@@ -136,13 +127,13 @@ def make_disc_update_fn(*, apply_fn, optimizer, lecam_regularization_weight, ema
             discriminator_loss = disc_factor * 0.5 * (loss_real + loss_fake)
 
             lecam_loss = jnp.zeros(())
-            if lecam_regularization_weight > 0.0:
-                lecam_loss = jnp.mean(jnp.pow(jax.nn.relu(logits_real - ema_fake), 2))
-                lecam_loss += jnp.mean(jnp.pow(jax.nn.relu(ema_real - logits_fake), 2))
-                lecam_loss *= lecam_regularization_weight
 
-                new_ema_real = ema_real * ema_decay + jnp.mean(logits_real) * (1 - ema_decay)
-                new_ema_fake = ema_fake * ema_decay + jnp.mean(logits_fake) * (1 - ema_decay)
+            lecam_loss = jnp.mean(jnp.pow(jax.nn.relu(logits_real - ema_fake), 2))
+            lecam_loss += jnp.mean(jnp.pow(jax.nn.relu(ema_real - logits_fake), 2))
+            lecam_loss *= lecam_regularization_weight
+
+            new_ema_real = ema_real * ema_decay + jnp.mean(logits_real) * (1 - ema_decay)
+            new_ema_fake = ema_fake * ema_decay + jnp.mean(logits_fake) * (1 - ema_decay)
 
             discriminator_loss += lecam_loss
 
@@ -189,20 +180,6 @@ def main(config_path):
         transforms.Lambda(lambda t: (t * 2) - 1),  # Scale [-1, 1]
         transforms.Lambda(lambda x: x.permute(1, 2, 0)),  # Convert [C, H, W] to [H, W, C]
     ])
-
-    if dataset_params['dataset'] == 'celeba':
-        train_dataset = HuggingFace(
-            dataset=load_dataset("flwrlabs/celeba", split='train'),
-            transform=transform,
-        )
-    elif dataset_params['dataset'] == 'coco':
-        train_dataset = CocoDataset(
-            dataset_dir=dataset_params['params']['dataset_dir'],
-            annotation_file_path=dataset_params['params']['ann_file_path'],
-            transform=transform,
-        )
-    else:
-        raise 'There is no such dataset'
 
     train_loader = DataLoader(
         train_dataset,
@@ -261,7 +238,6 @@ def main(config_path):
         perceptual_weight=perceptual_config['perceptual_weight'],
         discriminator_weight=disc_config['discriminator_weight'],
         entropy_annealing_factor=vqmodel_config['entropy_annealing_factor'],
-        entropy_annealing_steps=vqmodel_config['entropy_annealing_steps'],
         quantizer_weight=vqmodel_config['quantizer_weight'],
         ema_decay=vqmodel_config['ema_decay'],
         disc_start=disc_config['disc_start']
@@ -296,6 +272,13 @@ def main(config_path):
         "epoch": 0,
     }
 
+    del vqmodel_params
+    del vqmodel_opt_state
+    del disc_params
+    del disc_opt_state
+    del perceptual_params
+    del ema_params
+
     loaded_state = load_checkpoint(checkpoint_path, state_template)
     start_epoch = 0
     if loaded_state:
@@ -317,9 +300,14 @@ def main(config_path):
     global_step = 0
     global_step_repl = jnp.array([global_step] * jax.local_device_count())
 
+    entropy_annealing_steps = vqmodel_config['entropy_annealing_steps']
+
     for epoch in range(start_epoch, epochs):
         for step, images in enumerate(train_loader):
-            images = jax.tree_util.tree_map(lambda x: shard(np.array(x)), images)
+            images = jax.tree_util.tree_map(lambda x: shard(np.array(x)), images[0])
+
+            annealing_steps = max(0.0, 1 - global_step / entropy_annealing_steps)
+            annealing_steps_repl = jnp.array([annealing_steps] * jax.local_device_count())
 
             (
                 vqmodel_params_repl,
@@ -334,6 +322,7 @@ def main(config_path):
                 perceptual_params_repl,
                 images,
                 ema_params_repl,
+                annealing_steps_repl,
                 global_step_repl
             )
 
@@ -352,15 +341,10 @@ def main(config_path):
                 global_step_repl
             )
 
-            global_step += 1
-            global_step_repl = jnp.array([global_step] * jax.local_device_count())
-
-            ema_real_repl = replicate(discriminator_loss_dict['ema_real'])
-            ema_fake_repl = replicate(discriminator_loss_dict['ema_fake'])
+            ema_real_repl = discriminator_loss_dict['ema_real_logits']
+            ema_fake_repl = discriminator_loss_dict['ema_fake_logits']
 
             loss = unreplicate(generator_loss_dict['total_loss'])
-            losses = {loss_type: loss for loss_type, loss in generator_loss_dict if loss_type.endswith('loss')}
-            recon_loss, commitment_loss, embedding_loss, perceptual_loss, g_loss, ent_loss = losses
 
             if global_step % 1000 == 0:
                 import matplotlib.pyplot as plt
@@ -390,16 +374,22 @@ def main(config_path):
                 run.log({"reconstruction": wandb.Image(PILImage.open(buf))}, step=global_step)
 
             run.log({
-                "reconstruct_loss": recon_loss,
-                "commitment_loss": commitment_loss,
-                "embedding_loss": embedding_loss,
-                "perceptual_loss": perceptual_loss,
-                "g_loss": g_loss,
-                "ent_loss": ent_loss,
+                "reconstruct_loss": unreplicate(generator_loss_dict['reconstruction_loss']),
+                "perceptual_loss": unreplicate(generator_loss_dict['perceptual_loss']),
+                "quantizer_loss": unreplicate(generator_loss_dict['quantizer_loss']),
+                "weighted_generator_loss": unreplicate(generator_loss_dict['weighted_gan_loss']),
+                "generator_loss": unreplicate(generator_loss_dict['gan_loss']),
+                "entropy_loss": unreplicate(generator_loss_dict['entropy_loss']),
+                "commitment_loss": unreplicate(generator_loss_dict['commitment_loss']),
+                "discriminator_loss": unreplicate(discriminator_loss_dict['discriminator_loss']),
+                "lecam_loss": unreplicate(discriminator_loss_dict['lecam_loss']),
                 'disc_loss': unreplicate(disc_loss),
                 "total_loss": loss,
                 "epoch": epoch,
             })
+
+            global_step += 1
+            global_step_repl = jnp.array([global_step] * jax.local_device_count())
 
         save_checkpoint(checkpoint_path, {
             "params": unreplicate(vqmodel_params_repl),

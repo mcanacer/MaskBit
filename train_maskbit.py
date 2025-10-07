@@ -46,7 +46,7 @@ def cross_entropy_loss(logits, targets, label_smoothing):
         on_value = 1.0 - label_smoothing
         off_value = label_smoothing / num_classes
         y = jax.nn.one_hot(targets, num_classes)
-        y = on_value * y + (1 - y) * off_value
+        y = on_value * y + (1- y) * off_value
         loss = -jnp.sum(y * log_probs, axis=-1)
     else:
         loss = -log_probs[jnp.arange(targets.shape[0]), targets]
@@ -168,9 +168,10 @@ def main(config_path):
     vqmodel_params = load_checkpoint(vqmodel_checkpoint, None)['ema_params']
 
     inputs, labels = next(iter(train_loader))
+
     key = jax.random.PRNGKey(seed)
     key, sub_key = jax.random.split(key, 2)
-    params = maskbit.init(sub_key, jnp.ones((inputs.shape[0], 256)), jnp.array(labels),
+    params = maskbit.init(sub_key, jnp.ones((inputs.shape[0], 256, 2)), jnp.array(labels),
                           jnp.full(inputs.shape[0], True))
 
     opt_state = optimizer.init(params)
@@ -191,7 +192,7 @@ def main(config_path):
         class_label_dropout=maskbit_config['class_label_dropout'],
         label_smoothing=maskbit_config['label_smoothing'],
         codebook_size=2 ** vqmodel_config['params']['token_size'],
-        splits=maskbit_config['params']['codebook_splits'],
+        splits=maskbit_config['params']['splits'],
         mask_token=maskbit_config['params']['mask_token'],
         ema_decay=ema_decay,
     )

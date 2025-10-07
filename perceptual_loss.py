@@ -14,6 +14,9 @@ class PerceptualLoss(nn.Module):
         inputs = (inputs + 1.0) / 2.0
         targets = (targets + 1.0) / 2.0
 
+        inputs = inverse_norm(inputs)
+        targets = inverse_norm(targets)
+
         inputs = jax.image.resize(inputs, (inputs.shape[0], 224, 224, inputs.shape[-1]), method="bilinear")
         targets = jax.image.resize(targets, (targets.shape[0], 224, 224, targets.shape[-1]), method="bilinear")
 
@@ -22,3 +25,4 @@ class PerceptualLoss(nn.Module):
 
         loss = jnp.mean((features_inputs - features_targets) ** 2)
         return loss
+

@@ -7,7 +7,7 @@ import jax.numpy as jnp
 import optax
 from flax import serialization
 from torchvision import transforms
-from datasets import load_dataset
+from torchvision.datasets import ImageFolder
 from torch.utils.data import DataLoader
 import wandb
 from vqmodel import ConvVQModel
@@ -175,17 +175,32 @@ def main(config_path):
     seed = vqmodel_config['seed']
 
     transform = transforms.Compose([
-        transforms.Resize((dataset_params['img_size'], dataset_params['img_size'])),
-        transforms.ToTensor(),  # Normalize [0, 1]
+        transforms.RandomResizedCrop(
+            size=256,
+            scale=(0.8, 1.0),
+            ratio=(3/4, 4/3),
+            interpolation=transforms.InterpolationMode.BILINEAR
+        ),
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.ToTensor(), # Normalize [0, 1]
         transforms.Lambda(lambda t: (t * 2) - 1),  # Scale [-1, 1]
         transforms.Lambda(lambda x: x.permute(1, 2, 0)),  # Convert [C, H, W] to [H, W, C]
     ])
+
+    if dataset_params['dataset'] == 'imagenet':
+        train_dataset = ImageFolder(
+            root=dataset_params['data_path'],
+            transform=transform,
+        )
+    else:
+        raise 'There is no such dataset'
 
     train_loader = DataLoader(
         train_dataset,
         batch_size=dataset_params['batch_size'],
         shuffle=True,
         num_workers=dataset_params['num_workers'],
+        pin_memory=True,
         drop_last=True,
     )
 

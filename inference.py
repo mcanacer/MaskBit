@@ -106,6 +106,8 @@ def sample(
                 drop_labels_shard,
             )
 
+            logits = jax.tree_util.tree_map(lambda x: unshard(x), logits)
+
             logits_with_class, logits_without_class = jnp.split(logits, 2, axis=0)
 
             if guidance_annealing == "none":
@@ -130,7 +132,6 @@ def sample(
                 ~drop_labels_shard
             )
 
-        logits = jax.tree_util.tree_map(lambda x: unshard(x), logits)
         probabilities = jax.nn.softmax(logits / softmax_temperature, axis=-1)
         predicted_tokens = jax.random.categorical(categorical_rng, jnp.log(probabilities + 1e-20), axis=-1)
 
